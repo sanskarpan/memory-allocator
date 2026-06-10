@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memory Allocator Simulator</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Memory Allocator Simulator</h1>
+            <p>Interactive visualization of memory allocation strategies</p>
+        </header>
+
+        <!-- Control Panel -->
+        <div class="control-panel" role="region" aria-label="Allocator controls">
+            <div class="section">
+                <h3>Allocator Selection</h3>
+                <div class="form-group">
+                    <label for="allocator-type">Algorithm:</label>
+                    <select id="allocator-type" aria-describedby="allocator-type-desc">
+                        <option value="firstfit">First Fit</option>
+                        <option value="bestfit">Best Fit</option>
+                        <option value="worstfit">Worst Fit</option>
+                        <option value="buddy">Buddy System</option>
+                        <option value="slab">Slab Allocator</option>
+                        <option value="segregated">Segregated Fit</option>
+                        <option value="pool">Pool Allocator</option>
+                        <option value="arena">Arena Allocator</option>
+                    </select>
+                    <span id="allocator-type-desc" class="sr-only">Select a memory allocation algorithm to visualize</span>
+                </div>
+                <div class="form-group">
+                    <label for="memory-size">Memory Size (bytes):</label>
+                    <input type="number" id="memory-size" value="8192" min="1024" max="65536" step="1024"
+                           aria-describedby="memory-size-desc">
+                    <span id="memory-size-desc" class="sr-only">Total memory region size in bytes, between 1024 and 65536</span>
+                </div>
+                <div class="form-group pool-options" style="display: none;">
+                    <label for="block-size">Block Size (bytes):</label>
+                    <input type="number" id="block-size" value="256" min="64" max="2048" step="64"
+                           aria-describedby="block-size-desc">
+                    <span id="block-size-desc" class="sr-only">Fixed block size for pool allocator, between 64 and 2048</span>
+                </div>
+                <button id="init-btn" class="btn btn-primary" aria-describedby="init-btn-desc">Initialize Allocator</button>
+                <span id="init-btn-desc" class="sr-only">Initialize the selected allocator with the configured memory size</span>
+            </div>
+
+            <div class="section">
+                <h3>Simulation Control</h3>
+                <div class="button-group" role="group" aria-label="Simulation controls">
+                    <button id="start-btn" class="btn btn-success" disabled aria-label="Start automatic simulation">Start Auto</button>
+                    <button id="pause-btn" class="btn btn-warning" disabled aria-label="Pause simulation">Pause</button>
+                    <button id="resume-btn" class="btn btn-info" disabled aria-label="Resume simulation">Resume</button>
+                    <button id="stop-btn" class="btn btn-danger" disabled aria-label="Stop simulation">Stop</button>
+                    <button id="reset-btn" class="btn btn-secondary" disabled aria-label="Reset allocator to initial state">Reset</button>
+                </div>
+                <div class="form-group">
+                    <label for="speed-slider">Speed (ms):</label>
+                    <input type="range" id="speed-slider" min="50" max="1000" value="100" step="50"
+                           aria-describedby="speed-value" aria-label="Simulation speed in milliseconds">
+                    <span id="speed-value" aria-live="polite">100 ms</span>
+                </div>
+            </div>
+
+            <div class="section">
+                <h3>Manual Operations</h3>
+                <div class="form-group">
+                    <label for="alloc-size">Size (bytes):</label>
+                    <input type="number" id="alloc-size" value="512" min="1" max="4096"
+                           aria-describedby="alloc-size-desc">
+                    <span id="alloc-size-desc" class="sr-only">Number of bytes to allocate</span>
+                </div>
+                <div class="form-group">
+                    <label for="alloc-owner">Owner:</label>
+                    <input type="text" id="alloc-owner" value="User" placeholder="Allocation owner"
+                           aria-describedby="alloc-owner-desc">
+                    <span id="alloc-owner-desc" class="sr-only">Label for the allocation owner shown in the visualization</span>
+                </div>
+                <div class="button-group" role="group" aria-label="Manual allocation controls">
+                    <button id="allocate-btn" class="btn btn-primary" disabled>Allocate</button>
+                    <button id="deallocate-btn" class="btn btn-danger" disabled>Deallocate Selected</button>
+                </div>
+                <div class="button-group" role="group" aria-label="Maintenance operations">
+                    <button id="coalesce-btn" class="btn btn-secondary" disabled>Coalesce</button>
+                    <button id="detect-leaks-btn" class="btn btn-warning" disabled>Detect Leaks</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Visualization Area -->
+        <div class="visualization-panel" role="region" aria-label="Memory visualization">
+            <h3>Memory Visualization</h3>
+            <div id="memory-canvas-container">
+                <canvas id="memory-canvas" width="1200" height="400"
+                        role="img" aria-label="Memory allocation visualization"
+                        tabindex="0"
+                        aria-describedby="canvas-help"></canvas>
+                <span id="canvas-help" class="sr-only">
+                    Interactive memory map. Use Tab to focus, arrow keys to navigate between blocks,
+                    Enter or Space to select a block, Delete to deallocate the selected block.
+                </span>
+            </div>
+            <!-- Accessible block list for screen readers -->
+            <div id="block-list-sr" class="sr-only" role="list" aria-label="Memory blocks" aria-live="polite"></div>
+            <div id="selected-block-info" class="info-panel" style="display: none;" role="status" aria-live="polite">
+                <h4>Selected Block Info</h4>
+                <div id="block-details"></div>
+            </div>
+        </div>
+
+        <!-- Metrics Dashboard -->
+        <div class="metrics-panel" role="region" aria-label="Allocation metrics">
+            <div class="metric-card">
+                <h4>Allocations</h4>
+                <div class="metric-value" id="metric-allocations" aria-live="polite">0</div>
+                <div class="metric-label">Total</div>
+            </div>
+            <div class="metric-card">
+                <h4>Deallocations</h4>
+                <div class="metric-value" id="metric-deallocations" aria-live="polite">0</div>
+                <div class="metric-label">Total</div>
+            </div>
+            <div class="metric-card">
+                <h4>Current Usage</h4>
+                <div class="metric-value" id="metric-current" aria-live="polite">0 B</div>
+                <div class="metric-label">Active</div>
+            </div>
+            <div class="metric-card">
+                <h4>Peak Usage</h4>
+                <div class="metric-value" id="metric-peak" aria-live="polite">0 B</div>
+                <div class="metric-label">Maximum</div>
+            </div>
+            <div class="metric-card">
+                <h4>Fragmentation</h4>
+                <div class="metric-value" id="metric-fragmentation" aria-live="polite">0%</div>
+                <div class="metric-label">External</div>
+            </div>
+            <div class="metric-card">
+                <h4>Utilization</h4>
+                <div class="metric-value" id="metric-utilization" aria-live="polite">0%</div>
+                <div class="metric-label">Memory</div>
+            </div>
+            <div class="metric-card">
+                <h4>Failed Allocs</h4>
+                <div class="metric-value" id="metric-failed" aria-live="polite">0</div>
+                <div class="metric-label">Errors</div>
+            </div>
+            <div class="metric-card">
+                <h4>Avg Alloc Time</h4>
+                <div class="metric-value" id="metric-avg-time" aria-live="polite">0 ns</div>
+                <div class="metric-label">Latency</div>
+            </div>
+        </div>
+
+        <!-- Events Log -->
+        <div class="events-panel" role="region" aria-label="Event log">
+            <h3>Event Log</h3>
+            <div id="events-log" class="log-container" role="log" aria-live="polite" aria-relevant="additions"></div>
+        </div>
+
+        <!-- Memory Leaks -->
+        <div class="leaks-panel" id="leaks-panel" style="display: none;" role="alert" aria-live="assertive">
+            <h3>Detected Memory Leaks</h3>
+            <div id="leaks-list" class="log-container"></div>
+        </div>
+
+        <!-- Status Bar -->
+        <div class="status-bar" role="status" aria-live="polite">
+            <span id="status-text">Not connected</span>
+            <span id="allocator-info">No allocator initialized</span>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
