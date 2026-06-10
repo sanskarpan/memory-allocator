@@ -1,0 +1,56 @@
+# Files and directories that should NOT be copied into the Docker
+# build context. Speeds up builds and keeps secrets / build artefacts
+# out of the image.
+
+# Version control
+.git
+.gitignore
+.gitattributes
+
+# CI/CD
+.github
+.gitlab-ci.yml
+.circleci
+
+# Editor / OS noise
+.vscode
+.idea
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Build artefacts
+bin/
+dist/
+*.exe
+*.test
+*.out
+*.prof
+*.pprof
+coverage.txt
+coverage.html
+
+# Go module cache (rebuilt inside container)
+vendor/
+
+# Local dev / secrets
+.env
+.env.*
+*.pem
+*.key
+secrets/
+
+# Documentation that doesn't need to be in the image
+AUDIT_REPORT.md
+README.md
+LICENSE
+docs/
+
+# Test fixtures
+testdata/
+*.testdata
+
+# Local logs
+*.log
+logs/
