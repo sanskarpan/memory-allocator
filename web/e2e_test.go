@@ -46,30 +46,38 @@ func TestE2E_FullFlowFirstFit(t *testing.T) {
 		return out, nil
 	}
 
-	readUntil := func(deadline time.Duration, predicate func(map[string]interface{}) bool) (map[string]interface{}, error) {
-		end := time.Now().Add(deadline)
-		for time.Now().Before(end) {
-			msg, err := read()
-			if err != nil {
-				return nil, err
-			}
-			if predicate(msg) {
-				return msg, nil
-			}
-		}
-		return nil, errTimeout
-	}
-
-	send := func(m interface{}) error {
-		return conn.WriteJSON(m)
-	}
-
 	isSuccess := func(m map[string]interface{}) bool {
 		return m["type"] == "success"
 	}
 	isState := func(m map[string]interface{}) bool {
 		_, ok := m["metrics"].(map[string]interface{})
 		return ok
+	}
+
+	readSuccessAndState := func(deadline time.Duration) (map[string]interface{}, map[string]interface{}, error) {
+		end := time.Now().Add(deadline)
+		var successMsg map[string]interface{}
+		var stateMsg map[string]interface{}
+		for time.Now().Before(end) {
+			msg, err := read()
+			if err != nil {
+				return nil, nil, err
+			}
+			switch {
+			case successMsg == nil && isSuccess(msg):
+				successMsg = msg
+			case stateMsg == nil && isState(msg):
+				stateMsg = msg
+			}
+			if successMsg != nil && stateMsg != nil {
+				return successMsg, stateMsg, nil
+			}
+		}
+		return nil, nil, errTimeout
+	}
+
+	send := func(m interface{}) error {
+		return conn.WriteJSON(m)
 	}
 
 	// 1. Init
@@ -93,27 +101,24 @@ func TestE2E_FullFlowFirstFit(t *testing.T) {
 	if err := send(map[string]interface{}{"type": "allocate", "size": 256, "owner": "test"}); err != nil {
 		t.Fatalf("send alloc: %v", err)
 	}
-	r, err = readUntil(2*time.Second, isSuccess)
+	var state map[string]interface{}
+	r, state, err = readSuccessAndState(2 * time.Second)
 	if err != nil {
 		t.Fatalf("read alloc: %v", err)
 	}
 	if r["type"] != "success" {
 		t.Fatalf("expected alloc success, got %+v", r)
 	}
-	r, err = readUntil(2*time.Second, isState)
-	if err != nil {
-		t.Fatalf("read alloc state: %v", err)
-	}
-	metrics, ok := r["metrics"].(map[string]interface{})
+	metrics, ok := state["metrics"].(map[string]interface{})
 	if !ok {
-		t.Fatalf("expected metrics, got %+v", r)
+		t.Fatalf("expected metrics, got %+v", state)
 	}
 	if metrics["totalAllocations"].(float64) != 1 {
 		t.Errorf("expected 1 alloc, got %v", metrics["totalAllocations"])
 	}
 
 	// 3. Deallocate (extract address from state, then dealloc)
-	blocks, _ := r["blocks"].([]interface{})
+	blocks, _ := state["blocks"].([]interface{})
 	if len(blocks) == 0 {
 		t.Fatal("expected blocks in state")
 	}
@@ -122,18 +127,14 @@ func TestE2E_FullFlowFirstFit(t *testing.T) {
 	if err := send(map[string]interface{}{"type": "deallocate", "address": addr}); err != nil {
 		t.Fatalf("send dealloc: %v", err)
 	}
-	r, err = readUntil(2*time.Second, isSuccess)
+	r, state, err = readSuccessAndState(2 * time.Second)
 	if err != nil {
 		t.Fatalf("read dealloc: %v", err)
 	}
 	if r["type"] != "success" {
 		t.Fatalf("expected dealloc success, got %+v", r)
 	}
-	r, err = readUntil(2*time.Second, isState)
-	if err != nil {
-		t.Fatalf("read dealloc state: %v", err)
-	}
-	metrics = r["metrics"].(map[string]interface{})
+	metrics = state["metrics"].(map[string]interface{})
 	if metrics["totalDeallocations"].(float64) != 1 {
 		t.Errorf("expected 1 dealloc, got %v", metrics["totalDeallocations"])
 	}
