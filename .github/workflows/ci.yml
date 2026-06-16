@@ -120,6 +120,7 @@ jobs:
         with:
           context: .
           push: false
+          load: true
           tags: memory-allocator:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
