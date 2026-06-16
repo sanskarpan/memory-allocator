@@ -1,88 +1,81 @@
 # Issues — Memory Allocator Simulator
 
-**Date:** 2026-06-09
-**Audit scope:** Full production readiness audit
-
----
+**Date:** 2026-06-16
+**Audit scope:** Production stabilization audit
 
 ## Issue Registry
 
-| ID | Severity | Title | Affected Component | Status |
-|---|---|---|---|---|
-| ISS-001 | Medium | CalculateFragmentation releases lock before metrics update | `internal/allocator/allocator.go` | **FIXED** |
-| ISS-002 | Low | broadcastUpdate TOCTOU with closed channel | `internal/simulator/simulator.go` | **FIXED** |
-| ISS-003 | Low | Dockerfile references nonexistent main.version | `Dockerfile` + `cmd/server/main.go` | **FIXED** |
-| ISS-004 | Low | Arena Reset records deallocation before clearing metrics | `internal/pool/arena.go` | **FIXED** |
-| ISS-005 | Medium | Frontend lacks accessibility (ARIA, keyboard nav) | `web/static/*` | **FIXED** |
-| ISS-006 | Low | No CSP or SRI headers on frontend | `web/server.go` | **FIXED** |
-| ISS-007 | Low | No per-IP WebSocket rate limiting | `web/server.go` | **FIXED** |
-| ISS-008 | Info | Slab allocator dead code (`_ = class`) | `internal/allocator/slab.go` | **FIXED** |
+| ID | Severity | Title | Status |
+|---|---|---|---|
+| `FIT-001` | Medium | Fit-family allocators fail to auto-coalesce with right neighbor | Fixed |
+| `SEG-001` | Medium | Segregated allocator loses capacity for memory larger than one top-class slot | Fixed |
+| `SEG-002` | Low | Segregated buddy-address math is not base-relative | Fixed |
+| `WS-001` | Medium | WebSocket client shutdown can double-close channels | Fixed |
+| `CFG-001` | Low | Config parsing breaks colon-prefixed ports and unlimited connection mode | Fixed |
 
----
+## Detailed Issues
 
-## Detailed Descriptions
+### `FIT-001`
 
-### ISS-001: CalculateFragmentation TOCTOU
+- Severity: Medium
+- Affected components: `internal/allocator/fit.go`
+- Symptoms: freed blocks could remain artificially fragmented until a later explicit coalesce or favorable allocation pattern.
+- Root cause: right-neighbor merge logic looked up `blockMap[block.EndAddress()]`, but `blockMap` only contains allocated blocks. Free neighbors are tracked by linked-list adjacency, not by that map.
+- Impact: lower effective free-space consolidation and incorrect allocator behavior under common free-order patterns.
+- Reproduction:
+  1. Allocate two adjacent blocks.
+  2. Free the right block.
+  3. Free the left block.
+  4. Attempt to allocate the combined size.
+- Validation evidence: new regression `TestFirstFitAutoCoalescesWithRightNeighbor`, plus `go test ./...` and `go test -race -count=1 ./...`.
 
-**Severity:** Medium
-**Component:** `internal/allocator/allocator.go:154-177`
-**Description:** `BaseAllocator.CalculateFragmentation()` acquires `ba.mu.RLock()`, calls `ba.blocks.GetBlocks()` (which clones blocks), releases `ba.mu.RUnlock()`, then iterates over the cloned blocks to compute fragmentation. After computing, it calls `ba.metrics.UpdateFragmentation(frag)`. Between the RUnlock and the metrics update, concurrent allocations/deallocations can change the actual block list, making the computed fragmentation value stale.
-**Impact:** Fragmentation metric may be slightly inaccurate for a brief window. No data corruption or crash risk.
-**Root cause:** Lock released too early to avoid holding allocator lock during metrics write.
-**Reproduction:** Run concurrent allocation + fragmentation calculation. Observe that the fragmentation metric occasionally reflects a slightly older state.
+### `SEG-001`
 
-### ISS-002: broadcastUpdate TOCTOU
+- Severity: Medium
+- Affected components: `internal/allocator/segregated.go`
+- Symptoms: a large segregated allocator could exhaust after using only a fraction of total configured memory.
+- Root cause: initialization seeded a single top-level free block spanning the whole rounded region instead of one top-class block per top-class slot.
+- Impact: silent underutilization of memory and incorrect allocator capacity.
+- Reproduction:
+  1. Create a segregated allocator with `8192` bytes.
+  2. Repeatedly allocate `64`-byte blocks.
+  3. Observe exhaustion far earlier than the expected `128` allocations.
+- Validation evidence: new regression `TestSegregated_UsesFullCapacityAcrossTopLevelSlots`.
 
-**Severity:** Low
-**Component:** `internal/simulator/simulator.go:330-348`
-**Description:** `broadcastUpdate()` checks `<-s.done` with a default case, then proceeds to call the callback. If `Stop()` closes the done channel and the broadcast channel between the check and the callback's send to `s.broadcast`, a send-on-closed-channel panic occurs.
-**Impact:** Theoretical panic in a very narrow timing window. The callback's own done-check and the broadcast goroutine's draining behavior make this extremely unlikely.
-**Root cause:** Channel close and send not atomic.
-**Mitigation already in place:** Callback checks `callbackDone` and `sim.Done()` before sending. Broadcast goroutine uses non-blocking send.
+### `SEG-002`
 
-### ISS-003: Dockerfile main.version
+- Severity: Low
+- Affected components: `internal/allocator/segregated.go`
+- Symptoms: merge behavior depends on address/base coincidence rather than correct buddy math.
+- Root cause: buddy address used `block.Address ^ uintptr(class)` instead of base-relative XOR.
+- Impact: latent merge-address correctness bug and fragile implementation assumptions.
+- Reproduction: inspect merge logic for non-zero base address; compare with buddy allocator’s correct base-relative formula.
+- Validation evidence: included in the same segregated allocator regression pass after the fix.
 
-**Severity:** Low
-**Component:** `Dockerfile:32`
-**Description:** The Dockerfile passes `-ldflags="-s -w -X main.version=${VERSION}"` but `cmd/server/main.go` has no `version` variable. The linker silently ignores the undefined variable.
-**Impact:** No functional impact. Version stamping is not applied to the binary.
-**Root cause:** Variable was planned but never declared.
+### `WS-001`
 
-### ISS-004: Arena Reset metrics ordering
+- Severity: Medium
+- Affected components: `web/server.go`
+- Symptoms: shutdown/removal paths could panic under overlapping cleanup because multiple code paths directly closed the same `done` channel.
+- Root cause: channel lifecycle was not idempotent.
+- Impact: server panic risk during shutdown or slow-client removal races.
+- Reproduction:
+  1. Connect a client.
+  2. Trigger server shutdown while connection cleanup is in progress.
+  3. Observe double-close risk in pre-fix code path.
+- Validation evidence: new regression `TestServer_ShutdownClosesClientsWithoutDoubleClosePanic`.
 
-**Severity:** Low
-**Component:** `internal/pool/arena.go:145-164`
-**Description:** `ArenaAllocator.Reset()` iterates over blocks to sum sizes, calls `RecordDeallocation(totalSize, ...)`, then calls `metrics.Reset()`. The deallocation event is recorded and immediately wiped. There's a brief window where metrics show a deallocation that didn't meaningfully happen.
-**Impact:** Metrics snapshot taken during Reset may show inconsistent state. No functional impact.
-**Root cause:** Reset should either record the bulk deallocation OR reset metrics, not both.
+### `CFG-001`
 
-### ISS-005: Frontend accessibility
-
-**Severity:** Medium
-**Components:** `web/static/index.html`, `web/static/app.js`
-**Description:** The canvas visualization lacks `role="img"`, `aria-label`, and keyboard interaction handlers. Form inputs lack `aria-describedby` for error guidance. The block info panel uses raw `innerHTML` without semantic structure. No focus management for dynamic content updates.
-**Impact:** Users relying on screen readers or keyboard navigation cannot fully use the application. WCAG 2.1 AA compliance gap.
-**Root cause:** Accessibility was not a design requirement for the initial implementation.
-
-### ISS-006: No CSP/SRI headers
-
-**Severity:** Low
-**Component:** `web/server.go`
-**Description:** The server does not set Content-Security-Policy, X-Content-Type-Options, or X-Frame-Options headers. Frontend JS is served without Subresource Integrity.
-**Impact:** Reduced protection against XSS and code injection in a production deployment. Acceptable for a demo/educational tool.
-**Root cause:** Security headers not implemented in the HTTP handler.
-
-### ISS-007: No per-IP WebSocket rate limiting
-
-**Severity:** Low
-**Component:** `web/server.go`
-**Description:** A single client IP can open multiple WebSocket connections. The server disconnects slow clients but does not limit connection count per IP.
-**Impact:** Potential resource exhaustion under deliberate abuse. Should be handled at the reverse proxy level.
-**Root cause:** Rate limiting deferred to deployment infrastructure.
-
-### ISS-008: Slab allocator dead code
-
-**Severity:** Informational
-**Component:** `internal/allocator/slab.go:203`
-**Description:** `_ = class` in `Deallocate` is a dead assignment. The variable is assigned from `s.free[address]` but never used.
-**Impact:** No functional impact. Minor code cleanliness issue.
+- Severity: Low
+- Affected components: `web/server.go`
+- Symptoms:
+  - `MEMALLOC_PORT=:9090` became `::9090`
+  - `MEMALLOC_MAX_CONN_PER_IP=0` did not behave as unlimited
+- Root cause: config parser always prefixed `:` to port values and constructor logic rewrote non-positive connection limits to the default.
+- Impact: documented runtime contract did not match behavior.
+- Reproduction:
+  1. Set `MEMALLOC_PORT=:9090`.
+  2. Set `MEMALLOC_MAX_CONN_PER_IP=0`.
+  3. Read parsed config.
+- Validation evidence: new regressions `TestServer_ConfigFromEnvAllowsColonPortAndUnlimitedConnections` and `TestServer_UnlimitedConnectionsAllowed`.
