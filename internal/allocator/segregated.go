@@ -22,15 +22,12 @@ var DefaultSegregatedClasses = []int{16, 32, 64, 128, 256, 512, 1024, 2048, 4096
 // free list, and (if the buddy at the same class is also free)
 // merges them and promotes the result to the next class.
 //
-// The key difference from BuddyAllocator:
-//   - Class sizes are an explicit slice, not derived from
-//     minSize << level. The two allocators are isomorphic for
-//     power-of-two classes, but segregated-fit supports
-//     non-power-of-two classes (e.g. the FreeBSD malloc "small" bins
-//     use {16, 32, 48, 64, 80, ...}).
-//   - The free list per class stores block pointers (not just
-//     addresses), so the UI can render each free slot as its own
-//     visualization cell.
+// This implementation is intentionally buddy-compatible: classes must
+// be strictly ascending and each class must be exactly 2x the previous
+// one. That invariant keeps split/merge arithmetic exact.
+//
+// The free list per class stores block pointers (not just addresses),
+// so the UI can render each free slot as its own visualization cell.
 //
 // Thread safety: a single sync.Mutex serialises all operations, like
 // the existing fit-family allocators. The mutex is held during
@@ -64,12 +61,18 @@ func NewSegregatedFitAllocatorWithClasses(size int, classes []int) *SegregatedFi
 	if size <= 0 {
 		size = 4096
 	}
+	if len(classes) == 0 {
+		panic("segregated-fit: classes must not be empty")
+	}
 	cs := make([]int, len(classes))
 	copy(cs, classes)
 	sort.Ints(cs)
 	for i := 1; i < len(cs); i++ {
 		if cs[i] <= cs[i-1] {
 			panic("segregated-fit: classes must be strictly ascending")
+		}
+		if cs[i] != cs[i-1]*2 {
+			panic("segregated-fit: classes must double at each step")
 		}
 	}
 	maxClass := cs[len(cs)-1]
@@ -89,22 +92,22 @@ func NewSegregatedFitAllocatorWithClasses(size int, classes []int) *SegregatedFi
 		metrics:   metrics.NewAllocationMetrics(),
 		nextID:    1,
 	}
-	// Seed the free lists. Walk the region class-by-class from the
-	// largest down, so each large slot is "split" into smaller
-	// sub-slots only if needed. The simplest strategy: give the
-	// largest class the whole region, then split its slots into the
-	// next class's free list when allocations arrive. (This is
-	// effectively buddy, but with explicit class sizes.)
-	cursor := base
-	id := 0
-	// Lay out one big free block of the largest class; splitDown
-	// will handle the rest on demand.
-	initial := memory.NewBlock(id, cursor, total)
-	id++
-	s.blocks.Add(initial)
-	s.freeLists[maxClass] = append(s.freeLists[maxClass], initial)
-	s.nextID = id
+	s.seedTopClassSlots(maxClass)
 	return s
+}
+
+func (a *SegregatedFitAllocator) seedTopClassSlots(maxClass int) {
+	cursor := a.baseAddr
+	limit := a.baseAddr + uintptr(a.totalSize)
+	id := 0
+	for cursor < limit {
+		block := memory.NewBlock(id, cursor, maxClass)
+		a.blocks.Add(block)
+		a.freeLists[maxClass] = append(a.freeLists[maxClass], block)
+		cursor += uintptr(maxClass)
+		id++
+	}
+	a.nextID = id
 }
 
 // classFor returns the smallest class that fits size.
@@ -229,7 +232,7 @@ func (a *SegregatedFitAllocator) tryMergeUpLocked(block *memory.Block, class int
 		return
 	}
 	// Look for the buddy in the same class's free list.
-	buddyAddr := block.Address ^ uintptr(class)
+	buddyAddr := a.baseAddr + ((block.Address - a.baseAddr) ^ uintptr(class))
 	// We need to be careful: XOR is the buddy formula only when the
 	// region is aligned to class boundaries. For our layout
 	// (largest class slot at base, split downward), blocks at the
@@ -255,9 +258,11 @@ func (a *SegregatedFitAllocator) tryMergeUpLocked(block *memory.Block, class int
 	if block.Address < buddy.Address {
 		merged = block
 		a.blocks.Remove(buddy)
+		delete(a.blockMap, buddy.Address)
 	} else {
 		merged = buddy
 		a.blocks.Remove(block)
+		delete(a.blockMap, block.Address)
 	}
 	nextClass := a.classes[idx+1]
 	merged.Size = nextClass
@@ -377,9 +382,7 @@ func (a *SegregatedFitAllocator) Reset() {
 		a.freeLists[c] = nil
 	}
 	maxClass := a.classes[len(a.classes)-1]
-	initial := memory.NewBlock(0, a.baseAddr, a.totalSize)
-	a.blocks.Add(initial)
-	a.freeLists[maxClass] = append(a.freeLists[maxClass], initial)
+	a.seedTopClassSlots(maxClass)
 }
 
 // Name returns the allocator's display name.
