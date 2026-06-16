@@ -73,7 +73,7 @@ func (a *FirstFitAllocator) Deallocate(address uintptr) error {
 // list. Caller must hold a.mu.
 func (a *FirstFitAllocator) coalesceAtLocked(block *memory.Block) {
 	// Merge with next
-	if next, ok := a.blockMap[block.EndAddress()]; ok && next.IsFree() {
+	if next := block.Next(); next != nil && next.IsFree() {
 		block.Size += next.Size
 		a.blocks.Remove(next)
 		delete(a.blockMap, next.Address)
@@ -149,7 +149,7 @@ func (a *BestFitAllocator) Deallocate(address uintptr) error {
 }
 
 func (a *BestFitAllocator) coalesceAtLocked(block *memory.Block) {
-	if next, ok := a.blockMap[block.EndAddress()]; ok && next.IsFree() {
+	if next := block.Next(); next != nil && next.IsFree() {
 		block.Size += next.Size
 		a.blocks.Remove(next)
 		delete(a.blockMap, next.Address)
@@ -224,7 +224,7 @@ func (a *WorstFitAllocator) Deallocate(address uintptr) error {
 }
 
 func (a *WorstFitAllocator) coalesceAtLocked(block *memory.Block) {
-	if next, ok := a.blockMap[block.EndAddress()]; ok && next.IsFree() {
+	if next := block.Next(); next != nil && next.IsFree() {
 		block.Size += next.Size
 		a.blocks.Remove(next)
 		delete(a.blockMap, next.Address)
