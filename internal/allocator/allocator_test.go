@@ -184,6 +184,34 @@ func TestCoalescing(t *testing.T) {
 	alloc.Deallocate(b5.Address)
 }
 
+func TestFirstFitAutoCoalescesWithRightNeighbor(t *testing.T) {
+	alloc := NewFirstFitAllocator(512)
+
+	b1, err := alloc.Allocate(128, "left")
+	if err != nil {
+		t.Fatalf("alloc left: %v", err)
+	}
+	b2, err := alloc.Allocate(128, "right")
+	if err != nil {
+		t.Fatalf("alloc right: %v", err)
+	}
+
+	if err := alloc.Deallocate(b2.Address); err != nil {
+		t.Fatalf("free right: %v", err)
+	}
+	if err := alloc.Deallocate(b1.Address); err != nil {
+		t.Fatalf("free left: %v", err)
+	}
+
+	merged, err := alloc.Allocate(256, "merged")
+	if err != nil {
+		t.Fatalf("alloc merged: %v", err)
+	}
+	if merged.Address != b1.Address {
+		t.Fatalf("expected merged block at 0x%x, got 0x%x", b1.Address, merged.Address)
+	}
+}
+
 func TestFragmentation(t *testing.T) {
 	alloc := NewFirstFitAllocator(2048)
 
