@@ -59,7 +59,11 @@ func DefaultConfig() Config {
 func ConfigFromEnv() Config {
 	c := DefaultConfig()
 	if p := os.Getenv("MEMALLOC_PORT"); p != "" {
-		c.Port = ":" + p
+		if strings.HasPrefix(p, ":") {
+			c.Port = p
+		} else {
+			c.Port = ":" + p
+		}
 	}
 	if d := os.Getenv("MEMALLOC_STATIC_DIR"); d != "" {
 		c.StaticDir = d
@@ -79,7 +83,7 @@ func ConfigFromEnv() Config {
 	if v := envInt64Default("MEMALLOC_MAX_MESSAGE_BYTES", c.MaxMessageBytes); v > 0 {
 		c.MaxMessageBytes = v
 	}
-	if v := envIntDefault("MEMALLOC_MAX_CONN_PER_IP", c.MaxConnPerIP); v > 0 {
+	if v, ok := envIntAllowZero("MEMALLOC_MAX_CONN_PER_IP"); ok && v >= 0 {
 		c.MaxConnPerIP = v
 	}
 	return c
@@ -110,6 +114,15 @@ func envDurationDefault(key string, def time.Duration) time.Duration {
 		}
 	}
 	return def
+}
+
+func envIntAllowZero(key string) (int, bool) {
+	if v := os.Getenv(key); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 // upgrader builds a fresh *websocket.Upgrader per Server. Previously a
@@ -172,9 +185,16 @@ type Server struct {
 }
 
 type clientConn struct {
-	conn *websocket.Conn
-	send chan []byte
-	done chan struct{}
+	conn      *websocket.Conn
+	send      chan []byte
+	done      chan struct{}
+	closeOnce sync.Once
+}
+
+func (c *clientConn) close() {
+	c.closeOnce.Do(func() {
+		close(c.done)
+	})
 }
 
 // NewServer creates a new server with default config.
@@ -185,7 +205,7 @@ func NewServerWithConfig(cfg Config) *Server {
 	if cfg.BroadcastBuffer <= 0 {
 		cfg.BroadcastBuffer = 256
 	}
-	if cfg.MaxConnPerIP <= 0 {
+	if cfg.MaxConnPerIP < 0 {
 		cfg.MaxConnPerIP = 10
 	}
 	s := &Server{
@@ -248,6 +268,9 @@ func clientIP(r *http.Request) string {
 // acquireIPConn increments the connection count for the given IP and returns
 // true if the connection is allowed, or false if the per-IP limit is reached.
 func (s *Server) acquireIPConn(ip string) bool {
+	if s.cfg.MaxConnPerIP == 0 {
+		return true
+	}
 	s.ipConnCountMu.Lock()
 	defer s.ipConnCountMu.Unlock()
 	if s.ipConnCount[ip] >= s.cfg.MaxConnPerIP {
@@ -327,7 +350,7 @@ func (s *Server) Shutdown() {
 		close(s.broadcast)
 		s.clientsMu.Lock()
 		for c := range s.clients {
-			close(c.done)
+			c.close()
 		}
 		s.clientsMu.Unlock()
 	})
@@ -362,7 +385,7 @@ func (s *Server) handleBroadcasts() {
 	// Close all client send channels on shutdown
 	s.clientsMu.Lock()
 	for c := range s.clients {
-		close(c.done)
+		c.close()
 		delete(s.clients, c)
 	}
 	s.clientsMu.Unlock()
@@ -378,7 +401,7 @@ func (s *Server) removeClient(c *clientConn) {
 	s.clientsMu.Lock()
 	if _, ok := s.clients[c]; ok {
 		delete(s.clients, c)
-		close(c.done)
+		c.close()
 	}
 	s.clientsMu.Unlock()
 }
