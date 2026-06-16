@@ -700,8 +700,8 @@ func (s *Server) handleStart(c *clientConn) {
 		s.sendError(c, "Simulator not initialized")
 		return
 	}
-	sim.Start()
 	s.sendSuccess(c, "Simulation started")
+	sim.Start()
 }
 
 func (s *Server) handlePause(c *clientConn) {
@@ -710,8 +710,8 @@ func (s *Server) handlePause(c *clientConn) {
 		s.sendError(c, "Simulator not initialized")
 		return
 	}
-	sim.Pause()
 	s.sendSuccess(c, "Simulation paused")
+	sim.Pause()
 }
 
 func (s *Server) handleResume(c *clientConn) {
@@ -720,8 +720,8 @@ func (s *Server) handleResume(c *clientConn) {
 		s.sendError(c, "Simulator not initialized")
 		return
 	}
-	sim.Resume()
 	s.sendSuccess(c, "Simulation resumed")
+	sim.Resume()
 }
 
 func (s *Server) handleStop(c *clientConn) {
@@ -730,8 +730,8 @@ func (s *Server) handleStop(c *clientConn) {
 		s.sendError(c, "Simulator not initialized")
 		return
 	}
-	sim.Stop()
 	s.sendSuccess(c, "Simulation stopped")
+	sim.Stop()
 }
 
 func (s *Server) handleReset(c *clientConn) {
@@ -740,8 +740,8 @@ func (s *Server) handleReset(c *clientConn) {
 		s.sendError(c, "Simulator not initialized")
 		return
 	}
-	sim.Reset()
 	s.sendSuccess(c, "Simulation reset")
+	sim.Reset()
 }
 
 func (s *Server) handleAllocate(c *clientConn, msg map[string]interface{}) {
