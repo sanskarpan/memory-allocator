@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"net/url"
 	"testing"
@@ -9,6 +10,8 @@ import (
 
 	"github.com/gorilla/websocket"
 )
+
+var errTimeout = errors.New("timed out waiting for expected websocket message")
 
 // TestE2E_FullFlowFirstFit exercises a complete user journey over the
 // WebSocket API: init, allocate, deallocate, coalesce, reset.
@@ -43,8 +46,30 @@ func TestE2E_FullFlowFirstFit(t *testing.T) {
 		return out, nil
 	}
 
+	readUntil := func(deadline time.Duration, predicate func(map[string]interface{}) bool) (map[string]interface{}, error) {
+		end := time.Now().Add(deadline)
+		for time.Now().Before(end) {
+			msg, err := read()
+			if err != nil {
+				return nil, err
+			}
+			if predicate(msg) {
+				return msg, nil
+			}
+		}
+		return nil, errTimeout
+	}
+
 	send := func(m interface{}) error {
 		return conn.WriteJSON(m)
+	}
+
+	isSuccess := func(m map[string]interface{}) bool {
+		return m["type"] == "success"
+	}
+	isState := func(m map[string]interface{}) bool {
+		_, ok := m["metrics"].(map[string]interface{})
+		return ok
 	}
 
 	// 1. Init
@@ -68,14 +93,14 @@ func TestE2E_FullFlowFirstFit(t *testing.T) {
 	if err := send(map[string]interface{}{"type": "allocate", "size": 256, "owner": "test"}); err != nil {
 		t.Fatalf("send alloc: %v", err)
 	}
-	r, err = read()
+	r, err = readUntil(2*time.Second, isSuccess)
 	if err != nil {
 		t.Fatalf("read alloc: %v", err)
 	}
 	if r["type"] != "success" {
 		t.Fatalf("expected alloc success, got %+v", r)
 	}
-	r, err = read()
+	r, err = readUntil(2*time.Second, isState)
 	if err != nil {
 		t.Fatalf("read alloc state: %v", err)
 	}
@@ -97,14 +122,14 @@ func TestE2E_FullFlowFirstFit(t *testing.T) {
 	if err := send(map[string]interface{}{"type": "deallocate", "address": addr}); err != nil {
 		t.Fatalf("send dealloc: %v", err)
 	}
-	r, err = read()
+	r, err = readUntil(2*time.Second, isSuccess)
 	if err != nil {
 		t.Fatalf("read dealloc: %v", err)
 	}
 	if r["type"] != "success" {
 		t.Fatalf("expected dealloc success, got %+v", r)
 	}
-	r, err = read()
+	r, err = readUntil(2*time.Second, isState)
 	if err != nil {
 		t.Fatalf("read dealloc state: %v", err)
 	}
