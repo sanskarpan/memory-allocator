@@ -247,6 +247,27 @@ func TestSegregated_CustomClasses(t *testing.T) {
 	}
 }
 
+func TestSegregated_UsesFullCapacityAcrossTopLevelSlots(t *testing.T) {
+	a := NewSegregatedFitAllocator(8192)
+	count := 0
+	for {
+		b, err := a.Allocate(64, "bulk")
+		if err == ErrOutOfMemory {
+			break
+		}
+		if err != nil {
+			t.Fatalf("allocate: %v", err)
+		}
+		if b.Size != 64 {
+			t.Fatalf("got block size %d, want 64", b.Size)
+		}
+		count++
+	}
+	if count != 128 {
+		t.Fatalf("expected to allocate 128 64-byte blocks from 8192 bytes, got %d", count)
+	}
+}
+
 func TestSegregated_PanicOnNonAscending(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
@@ -254,4 +275,13 @@ func TestSegregated_PanicOnNonAscending(t *testing.T) {
 		}
 	}()
 	NewSegregatedFitAllocatorWithClasses(1024, []int{16, 32, 16})
+}
+
+func TestSegregated_PanicOnNonDoublingClasses(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic on non-doubling classes")
+		}
+	}()
+	NewSegregatedFitAllocatorWithClasses(1024, []int{16, 32, 96})
 }
