@@ -210,6 +210,16 @@ func TestServer_ParallelServers(t *testing.T) {
 	}
 }
 
+func TestServer_ShutdownClosesClientsWithoutDoubleClosePanic(t *testing.T) {
+	srv := newTestServer(t)
+	conn, ts := connectWS(t, srv)
+	defer ts.Close()
+	defer conn.Close()
+
+	srv.Shutdown()
+	time.Sleep(50 * time.Millisecond)
+}
+
 func sendWS(t *testing.T, conn *websocket.Conn, msg interface{}) {
 	t.Helper()
 	data, err := json.Marshal(msg)
