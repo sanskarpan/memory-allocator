@@ -356,6 +356,36 @@ func TestServer_ConfigFromEnv(t *testing.T) {
 	}
 }
 
+func TestServer_ConfigFromEnvAllowsColonPortAndUnlimitedConnections(t *testing.T) {
+	t.Setenv("MEMALLOC_PORT", ":9090")
+	t.Setenv("MEMALLOC_MAX_CONN_PER_IP", "0")
+
+	cfg := ConfigFromEnv()
+	if cfg.Port != ":9090" {
+		t.Fatalf("Expected port :9090, got %q", cfg.Port)
+	}
+	if cfg.MaxConnPerIP != 0 {
+		t.Fatalf("Expected unlimited MaxConnPerIP=0, got %d", cfg.MaxConnPerIP)
+	}
+}
+
+func TestServer_UnlimitedConnectionsAllowed(t *testing.T) {
+	srv := NewServerWithConfig(Config{
+		Port:         ":0",
+		StaticDir:    "/tmp",
+		MaxConnPerIP: 0,
+	})
+
+	for i := 0; i < 20; i++ {
+		if !srv.acquireIPConn("203.0.113.10") {
+			t.Fatalf("connection %d should have been allowed", i+1)
+		}
+	}
+	for i := 0; i < 20; i++ {
+		srv.releaseIPConn("203.0.113.10")
+	}
+}
+
 func TestServer_ClientIPParsesForwardedFor(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "http://example.com/ws", nil)
 	req.RemoteAddr = "192.0.2.10:1234"
